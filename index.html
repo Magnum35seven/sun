@@ -20,14 +20,15 @@
       <button class="icon-button locate" id="locateBtn" title="Use my location" aria-label="Use my location">◎</button>
     </header>
     <div class="map-actions">
-      <button class="action-button" id="fetchBuildingsBtn"><span>▦</span> Load buildings</button>
+      <button class="action-button primary" id="fetchBuildingsBtn"><span>▦</span> Load buildings</button>
       <button class="action-button" id="auditModeBtn"><span>⌖</span> Sun audit</button>
       <button class="action-button" id="addFenceBtn"><span>＋</span> Fence / tree</button>
+      <button class="action-button" id="printBtn"><span>▤</span> Print sun sheet</button>
     </div>
     <div class="map-legend"><i></i> Building <i class="green"></i> Your additions <i class="shade"></i> Shadow</div>
     <div id="toast" role="status" aria-live="polite"></div>
     <section class="panel" aria-label="Sun controls">
-      <div class="panel-head">
+      <div class="panel-head" id="panelDragHandle" title="Drag to move this panel">
         <div><span class="eyebrow">SUN POSITION</span><div class="time-readout" id="timeDisplay">12:00 pm</div></div>
         <div class="sun-data"><span id="sunStats">Sun altitude —</span><span id="sunDirection">Direction —</span></div>
         <button id="panelToggle" class="icon-button panel-toggle" aria-label="Collapse controls">⌄</button>
@@ -40,6 +41,17 @@
       </div>
     </section>
   </main>
+  <dialog id="printDialog" class="print-dialog">
+    <form id="printForm">
+      <div class="dialog-heading"><div><span class="eyebrow">PRINT PLANNER</span><h2>Build a sun position sheet</h2></div><button type="button" class="icon-button dialog-close" id="closePrintDialog" aria-label="Close">×</button></div>
+      <label class="report-option"><input type="radio" name="reportMode" value="seasons" checked><span><strong>Four seasons</strong><small>Compare the sun at the same time on four seasonal dates.</small></span></label>
+      <label class="report-option"><input type="radio" name="reportMode" value="solstice"><span><strong>Four times on a solstice</strong><small>Compare morning through evening on a winter or summer solstice.</small></span></label>
+      <div class="print-fields"><label>Time for seasonal comparison<input id="reportTime" type="time" value="12:00"></label><label>Solstice<select id="solsticeChoice"><option value="winter">Winter solstice</option><option value="summer">Summer solstice</option></select></label></div>
+      <p class="dialog-note">Prints a four-block A4 sheet with compass bearing and sun altitude for each date and time.</p>
+      <div class="dialog-actions"><button type="button" class="cancel-button" id="cancelPrint">Cancel</button><button type="submit" class="print-submit">Prepare print sheet</button></div>
+    </form>
+  </dialog>
+  <section id="printSheet" aria-label="Printable sun position sheet"></section>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js" crossorigin=""></script>
   <script src="https://unpkg.com/suncalc@1.9.0/suncalc.js" crossorigin=""></script>
