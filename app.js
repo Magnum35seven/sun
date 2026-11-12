@@ -6,12 +6,13 @@
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 20, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   }).addTo(map);
-  const buildingLayer = L.layerGroup().addTo(map), shadowLayer = L.layerGroup().addTo(map), pinLayer = L.layerGroup().addTo(map);
+  const buildingLayer = L.layerGroup().addTo(map), boundaryLayer = L.layerGroup().addTo(map);
+  const shadowLayer = L.layerGroup().addTo(map), pinLayer = L.layerGroup().addTo(map);
   const $ = id => document.getElementById(id);
   const datePicker = $('datePicker'), timeSlider = $('timeSlider'), timeDisplay = $('timeDisplay');
   const sunStats = $('sunStats'), sunDirection = $('sunDirection'), toast = $('toast');
   datePicker.value = '2026-06-21';
-  let buildingsData = [], auditMode = false, fenceMode = false, fenceStartPoint = null, currentPin = null, toastTimer, buildingsLoading = false;
+  let buildingsData = [], osmBoundaryFeatures = [], nswAttributionAdded = false, lastLoadedBbox = null, auditMode = false, fenceMode = false, fenceStartPoint = null, currentPin = null, toastTimer, buildingsLoading = false, pendingBuildingsLoad = false, moveLoadTimer;
 
   function showToast(message, duration = 3000) {
     toast.textContent = message; toast.style.display = 'block'; clearTimeout(toastTimer);
@@ -66,6 +67,35 @@
     }
   }
 
+  function renderBoundaries(features) {
+    boundaryLayer.clearLayers();
+    for (const feature of features) {
+      L.geoJSON(feature, {
+        interactive: false,
+        style: { color: feature.properties && feature.properties.source === 'osm' ? '#22d3ee' : '#1686bd', weight: 2, opacity: .95, fill: false, dashArray: feature.properties && feature.properties.source === 'osm' ? '5 4' : null }
+      }).addTo(boundaryLayer);
+    }
+  }
+  async function fetchNswPropertyBoundaries(bounds) {
+    const center = bounds.getCenter();
+    // NSW property parcel service covers NSW only; other regions use mapped OSM boundary ways.
+    if (center.lat < -37.6 || center.lat > -28 || center.lng < 140.9 || center.lng > 153.7) return [];
+    const geometry = {
+      xmin: bounds.getWest(), ymin: bounds.getSouth(), xmax: bounds.getEast(), ymax: bounds.getNorth(),
+      spatialReference: { wkid: 4326 }
+    };
+    const params = new URLSearchParams({
+      f: 'geojson', where: '1=1', geometry: JSON.stringify(geometry), geometryType: 'esriGeometryEnvelope',
+      spatialRel: 'esriSpatialRelIntersects', inSR: '4326', outSR: '4326',
+      outFields: 'lotnumber,sectionnumber,planlabel,planlotarea', returnGeometry: 'true', resultRecordCount: '1500'
+    });
+    const response = await fetch(`https://portal.spatial.nsw.gov.au/server/rest/services/NSW_Land_Parcel_Property_Theme/FeatureServer/8/query?${params}`);
+    if (!response.ok) throw new Error('NSW property boundary request failed');
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message || 'NSW property boundary request failed');
+    return (data.features || []).filter(feature => feature.geometry).map(feature => ({ ...feature, properties: { ...feature.properties, source: 'nsw' } }));
+  }
+
   async function searchAddress(event) {
     if (event) event.preventDefault();
     const q = $('addressInput').value.trim(); if (!q) return;
@@ -75,46 +105,76 @@
       if (!response.ok) throw new Error('Search service unavailable');
       const data = await response.json();
       if (!data.length) { showToast('Address not found. Try adding a suburb or postcode.'); return; }
-      map.setView([Number(data[0].lat), Number(data[0].lon)], 18); showToast(`Showing ${data[0].display_name.split(',').slice(0, 2).join(',')}`);
+      map.setView([Number(data[0].lat), Number(data[0].lon)], 18, { animate: false });
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      showToast(`Showing ${data[0].display_name.split(',').slice(0, 2).join(',')}`);
       await fetchBuildings();
     } catch (error) { showToast('Search failed. Check your connection and try again.'); }
   }
-  async function fetchBuildings() {
-    if (buildingsLoading) { showToast('Nearby building footprints are already loading.', 1800); return; }
-    if (map.getZoom() < 16) { showToast('Zoom in to street level before loading buildings.'); return; }
+  async function fetchBuildings(force = false) {
+    if (buildingsLoading) { pendingBuildingsLoad = true; return; }
+    clearTimeout(moveLoadTimer);
+    if (map.getZoom() < 16) {
+      buildingsData = buildingsData.filter(building => building.isCustom);
+      osmBoundaryFeatures = []; lastLoadedBbox = null; renderBuildings(); renderBoundaries([]); updateShadows();
+      showToast('Zoom in to street level to load buildings and property boundaries.'); return;
+    }
     const bounds = map.getBounds();
     const bbox = `${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`;
-    const query = `[out:json][timeout:25];(way["building"](${bbox}););out body;>;out skel qt;`;
+    if (!force && bbox === lastLoadedBbox) return;
+    const query = `[out:json][timeout:25];(way["building"](${bbox});way["boundary"~"^(parcel|cadastral)$"](${bbox});way["barrier"~"^(fence|hedge|wall)$"](${bbox}););out body;>;out skel qt;`;
     buildingsLoading = true;
     const buildingsButton = $('fetchBuildingsBtn');
     buildingsButton.disabled = true;
     buildingsButton.innerHTML = '<span>◌</span> Loading…';
     showToast('Loading nearby building footprints from OpenStreetMap…', 0);
     try {
-      const response = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: query });
-      if (!response.ok) throw new Error('Overpass request failed');
-      const data = await response.json(), nodes = new Map();
-      for (const el of data.elements) if (el.type === 'node') nodes.set(el.id, [el.lon, el.lat]);
-      const custom = buildingsData.filter(b => b.isCustom); buildingsData = [...custom];
-      for (const el of data.elements) {
-        if (el.type !== 'way' || !el.nodes || el.nodes.length < 4) continue;
-        const coords = el.nodes.map(id => nodes.get(id)).filter(Boolean);
-        if (coords.length < 4) continue;
-        if (coords[0][0] !== coords.at(-1)[0] || coords[0][1] !== coords.at(-1)[1]) coords.push(coords[0]);
-        const tags = el.tags || {}; let height = Number.parseFloat(tags.height);
-        if (!Number.isFinite(height)) height = Number.parseFloat(tags['building:levels']) * 3.2;
-        if (!Number.isFinite(height)) height = 5.5;
-        try { buildingsData.push({ id: el.id, poly: turf.polygon([coords]), height, label: tags.name || 'Building', isCustom: false }); } catch (_) { /* Ignore invalid footprints. */ }
+      const [osmResult, nswResult] = await Promise.allSettled([
+        fetch('https://overpass-api.de/api/interpreter', { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: query }).then(async response => {
+          if (!response.ok) throw new Error('OpenStreetMap query failed');
+          return response.json();
+        }),
+        fetchNswPropertyBoundaries(bounds)
+      ]);
+      let buildingCount = 0; osmBoundaryFeatures = [];
+      if (osmResult.status === 'fulfilled') {
+        const data = osmResult.value, nodes = new Map();
+        for (const el of data.elements || []) if (el.type === 'node') nodes.set(el.id, [el.lon, el.lat]);
+        const custom = buildingsData.filter(b => b.isCustom); buildingsData = [...custom];
+        for (const el of data.elements || []) {
+          if (el.type !== 'way' || !el.nodes) continue;
+          const coords = el.nodes.map(id => nodes.get(id)).filter(Boolean), tags = el.tags || {};
+          if (tags.building && coords.length >= 4) {
+            if (coords[0][0] !== coords.at(-1)[0] || coords[0][1] !== coords.at(-1)[1]) coords.push(coords[0]);
+            let height = Number.parseFloat(tags.height);
+            if (!Number.isFinite(height)) height = Number.parseFloat(tags['building:levels']) * 3.2;
+            if (!Number.isFinite(height)) height = 5.5;
+            try { buildingsData.push({ id: el.id, poly: turf.polygon([coords]), height, label: tags.name || 'Building', isCustom: false }); buildingCount++; } catch (_) { /* Ignore invalid footprints. */ }
+          }
+          if ((tags.boundary === 'parcel' || tags.boundary === 'cadastral' || ['fence', 'hedge', 'wall'].includes(tags.barrier)) && coords.length >= 2) {
+            try { osmBoundaryFeatures.push({ ...turf.lineString(coords), properties: { source: 'osm' } }); } catch (_) { /* Ignore invalid boundary lines. */ }
+          }
+        }
+      } else {
+        buildingsData = buildingsData.filter(b => b.isCustom);
       }
-      renderBuildings(); updateShadows(); if (currentPin) runPinAudit(currentPin);
-      showToast(buildingsData.length
-        ? `Loaded ${buildingsData.length} structures. Tap one to adjust its height.`
-        : 'No building footprints found in this map area. Try zooming out slightly and loading again.');
-    } catch (error) { showToast('Could not load building footprints. Check your connection and try again.'); }
+      const nswBoundaries = nswResult.status === 'fulfilled' ? nswResult.value : [];
+      if (nswBoundaries.length && !nswAttributionAdded) {
+        map.attributionControl.addAttribution('Parcel boundaries &copy; <a href="https://www.spatial.nsw.gov.au/">NSW Spatial Services</a>');
+        nswAttributionAdded = true;
+      }
+      const boundaries = nswBoundaries.length ? nswBoundaries : osmBoundaryFeatures;
+      renderBuildings(); renderBoundaries(boundaries); updateShadows(); if (currentPin) runPinAudit(currentPin);
+      lastLoadedBbox = bbox;
+      if (osmResult.status === 'rejected' && !boundaries.length) showToast('Could not load map data. Check your connection and try again.');
+      else if (nswResult.status === 'rejected' && !boundaries.length && bounds.getCenter().lat < -28 && bounds.getCenter().lat > -37.6 && bounds.getCenter().lng > 140.9 && bounds.getCenter().lng < 153.7) showToast(`Loaded ${buildingCount} buildings. NSW property boundaries could not be reached; try again later.`);
+      else showToast(`Loaded ${buildingCount} buildings and ${boundaries.length} property boundaries${nswBoundaries.length ? ' from NSW Spatial Services' : ''}.`);
+    } catch (error) { showToast('Could not load nearby map data. Check your connection and try again.'); }
     finally {
       buildingsLoading = false;
       buildingsButton.disabled = false;
       buildingsButton.innerHTML = '<span>▦</span> Load buildings';
+      if (pendingBuildingsLoad) { pendingBuildingsLoad = false; setTimeout(fetchBuildings, 50); }
     }
   }
   function runPinAudit(latlng) {
@@ -140,7 +200,7 @@
   }
 
   $('searchForm').addEventListener('submit', searchAddress);
-  $('fetchBuildingsBtn').addEventListener('click', fetchBuildings);
+  $('fetchBuildingsBtn').addEventListener('click', () => fetchBuildings(true));
   function saveLocation(lat, lng) {
     try { localStorage.setItem('sunray-last-location', JSON.stringify({ lat, lng })); } catch (_) { /* Continue without saved location. */ }
   }
@@ -156,9 +216,9 @@
     if (!silent) showToast('Finding your location…', 0);
     navigator.geolocation.getCurrentPosition(position => {
       const { latitude: lat, longitude: lng } = position.coords;
-      saveLocation(lat, lng); map.setView([lat, lng], 18);
+      saveLocation(lat, lng); map.setView([lat, lng], 18, { animate: false });
       if (!silent) showToast('Showing your current location and loading buildings…');
-      fetchBuildings();
+      requestAnimationFrame(fetchBuildings);
     }, () => {
       if (!silent) showToast('Could not access location. Check browser permission.');
     }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 });
@@ -287,7 +347,11 @@
     });
   }
   setupDraggablePanel();
-  map.on('moveend', updateShadows);
+  map.on('moveend', () => {
+    updateShadows();
+    clearTimeout(moveLoadTimer);
+    moveLoadTimer = setTimeout(fetchBuildings, 550);
+  });
   updateShadows();
   async function locateAndLoadBuildings() {
     const savedLocation = getSavedLocation();
@@ -300,11 +364,11 @@
       return;
     }
     const startAt = savedLocation || defaultCoords;
-    map.setView(startAt, 18);
+    map.setView(startAt, 18, { animate: false });
     showToast(savedLocation
       ? 'Showing your last saved location. Use the location button to refresh GPS.'
       : 'Showing Wahroonga. Use the location button once to save your location for future launches.');
-    fetchBuildings();
+    requestAnimationFrame(fetchBuildings);
   }
   locateAndLoadBuildings();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('./sw.js').catch(() => {});
