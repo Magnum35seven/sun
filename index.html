@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#101b2b">
+  <meta name="description" content="Explore sun exposure and building shadows for properties and gardens.">
+  <title>SunRay Scout — Sun & Shadow Mapper</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app">
+    <div id="map" aria-label="Interactive map"></div>
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="SunRay Scout home"><span class="brand-icon">☀</span><span><b>SunRay</b><small>SCOUT</small></span></a>
+      <form class="search" id="searchForm"><input id="addressInput" type="search" placeholder="Search an address or suburb" aria-label="Search address"><button aria-label="Search">⌕</button></form>
+      <button class="icon-button locate" id="locateBtn" title="Use my location" aria-label="Use my location">◎</button>
+    </header>
+    <div class="map-actions">
+      <button class="action-button" id="fetchBuildingsBtn"><span>▦</span> Load buildings</button>
+      <button class="action-button" id="auditModeBtn"><span>⌖</span> Sun audit</button>
+      <button class="action-button" id="addFenceBtn"><span>＋</span> Fence / tree</button>
+    </div>
+    <div class="map-legend"><i></i> Building <i class="green"></i> Your additions <i class="shade"></i> Shadow</div>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <section class="panel" aria-label="Sun controls">
+      <div class="panel-head">
+        <div><span class="eyebrow">SUN POSITION</span><div class="time-readout" id="timeDisplay">12:00 pm</div></div>
+        <div class="sun-data"><span id="sunStats">Sun altitude —</span><span id="sunDirection">Direction —</span></div>
+        <button id="panelToggle" class="icon-button panel-toggle" aria-label="Collapse controls">⌄</button>
+      </div>
+      <div class="panel-content" id="panelContent">
+        <div class="date-row"><div class="presets"><button data-date="2026-06-21">Winter</button><button data-date="2026-09-22">Equinox</button><button data-date="2026-12-21">Summer</button></div><label class="date-input"><span>Date</span><input type="date" id="datePicker"></label></div>
+        <div class="slider-row"><span>5 am</span><input type="range" id="timeSlider" min="300" max="1260" step="10" value="720" aria-label="Time of day"><span>9 pm</span></div>
+        <div class="audit-card" id="auditCard"><div class="audit-heading"><div><span class="eyebrow">GARDEN SPOT REPORT</span><strong id="auditTitle">Sun exposure</strong></div><span class="badge" id="auditBadge">—</span></div><div id="auditDetails"></div></div>
+        <p class="hint" id="mapHint">Move the slider to explore shadows. Load buildings for a more useful estimate.</p>
+      </div>
+    </section>
+  </main>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js" crossorigin=""></script>
+  <script src="https://unpkg.com/suncalc@1.9.0/suncalc.js" crossorigin=""></script>
+  <script src="app.js"></script>
+</body>
+</html>

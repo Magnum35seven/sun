@@ -1,0 +1,13 @@
+{
+  "name": "SunRay Scout — Sun & Shadow Mapper",
+  "short_name": "SunRay Scout",
+  "description": "Explore sun exposure and building shadows for properties and gardens.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#101b2b",
+  "theme_color": "#101b2b",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
